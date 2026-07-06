@@ -1,12 +1,19 @@
-# SoundCloud Playback
+<p align="center">
+  <img width="100" height="100" alt="icon_old" src="https://github.com/user-attachments/assets/37baa8ee-71f1-4b84-b079-2a35bcad5d39" />
 
-[![ru](https://img.shields.io/badge/язык-Русский%20🇷🇺-white)](#русский)
-[![en](https://img.shields.io/badge/lang-English%20🇬🇧-white)](#english)
+</p>
 
-<p align="left">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0-blue.svg?style=flat-square">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Tampermonkey-lightgrey.svg?style=flat-square">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square">
+<h1 align="center">SoundCloud Playback</h1>
+
+<p align="center">
+  <a href="#русский"><img src="https://img.shields.io/badge/язык-Русский%20🇷🇺-white" alt="ru"></a>
+  <a href="#english"><img src="https://img.shields.io/badge/lang-English%20🇬🇧-white" alt="en"></a>
+</p>
+
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0-blue.svg">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Tampermonkey-lightgrey.svg">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg">
 </p>
 
 > [!NOTE]  
@@ -77,5 +84,5 @@ By default, the SoundCloud web player forgets your active playback session when 
 > For Chromium-based browsers (Chrome, Edge, Brave) using newer versions of Tampermonkey (MV3), you may need to enable **"Developer mode"** on your extensions page.
 
 1. Install a userscript manager: **[Tampermonkey](https://www.tampermonkey.net/)** or **Violentmonkey**.
-2. **[Install the script]([https://raw.githubusercontent.com/aksyanoff/YOUR-REPO-NAME/main/PlaybackFix.js](https://raw.githubusercontent.com/aksyanoff/soundcloud-playback/main/PlaybackFix.js)**
+2. **[Install the script](https://raw.githubusercontent.com/aksyanoff/soundcloud-playback/main/PlaybackFix.js)**
 3. Open SoundCloud and enjoy seamless playback.
