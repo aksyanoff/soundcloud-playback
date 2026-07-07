@@ -1,17 +1,30 @@
 // ==UserScript==
-// @name         SoundCloud Playback Restore
-// @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Saves playback progress and restores context (likes, playlists) with a premium visual highlight.
+// @name         SoundCloud Playback
+// @name:ru      SoundCloud Playback
+// @namespace    https://github.com/aksyanoff
+// @version      1.1
+// @description  Saves playback progress and restores context (likes, playlists) with visual highlight.
+// @description:ru Сохраняет прогресс воспроизведения и автоматически восстанавливает контекст (лайки, плейлисты) с визуальной подсветкой.
 // @author       aksyanoff
+// @license      MIT
+// @icon         https://raw.githubusercontent.com/aksyanoff/soundcloud-playback/main/images/icon64.png
+// @homepageURL  https://github.com/aksyanoff/soundcloud-playback
+// @source       https://github.com/aksyanoff/soundcloud-playback.git
+// @supportURL   https://github.com/aksyanoff/soundcloud-playback/issues
+// @downloadURL  https://raw.githubusercontent.com/aksyanoff/soundcloud-playback/main/PlaybackFix.user.js
+// @updateURL    https://raw.githubusercontent.com/aksyanoff/soundcloud-playback/main/PlaybackFix.user.js
 // @match        https://soundcloud.com/*
+// @run-at       document-end
+// @noframes
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
+
+    if (window.top !== window.self) return;
 
     const IGNORE_LAST_SEC = 5;
     const LONG_TRACK_SEC = 600;
@@ -38,27 +51,20 @@
             animation: sc-playback-card-anim 2.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards !important;
         }
 
-        /* Neon halo overlay */
         .sc-playback-target-highlight::after {
             content: '';
             position: absolute;
             pointer-events: none;
             z-index: 1000;
-            
-            /* Base coordinates ensure the halo expands outward by 8px, creating breathing room */
             top: -8px; left: -8px; right: -8px; bottom: -8px;
             border-radius: 12px;
-            
-            /* Pure light effect without hard borders */
             box-shadow: 
-                0 0 10px 4px rgba(255, 85, 0, 0.9),       /* Core light ring */
-                0 0 30px 10px rgba(255, 85, 0, 0.4),      /* Outer ambient glow */
-                inset 0 0 15px 4px rgba(255, 85, 0, 0.6); /* Inner ambient glow */
-                
+                0 0 10px 4px rgba(255, 85, 0, 0.9),
+                0 0 30px 10px rgba(255, 85, 0, 0.4),
+                inset 0 0 15px 4px rgba(255, 85, 0, 0.6);
             animation: sc-playback-halo-anim 2.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
         }
 
-        /* Exception for List View (Playlists) where internal padding already exists */
         .trackList__item.sc-playback-target-highlight::after,
         .soundList__item.sc-playback-target-highlight::after {
             top: 0; left: 0; right: 0; bottom: 0;
@@ -72,29 +78,40 @@
     let pendingScrollPage = null;
     let scrollAttempts = 0;
     let pendingTrackPlay = false;
+    let transitionTimer = null;
 
     const cancelScroll = () => {
-        if (pendingScrollTarget) {
+        clearTimeout(transitionTimer);
+        if (pendingScrollTarget || pendingScrollPage) {
             pendingScrollTarget = null;
             pendingScrollPage = null;
             scrollAttempts = 0;
         }
     };
 
+    function startScrollWithDelay(target, page) {
+        pendingScrollPage = page;
+        scrollAttempts = 0;
+        clearTimeout(transitionTimer);
+        transitionTimer = setTimeout(() => {
+            pendingScrollTarget = target;
+        }, 1500); // 1.5s delay to allow SPA routing and DOM updates
+    }
+
     document.addEventListener('mousedown', (e) => {
         const isManualPlay = e.target.closest('.sc-button-play, .playButton, .soundTitle__title, .soundBadge__titleLink, .trackItem__trackTitle');
-        if (isManualPlay) stickyContextUrl = null;
-        cancelScroll();
+        if (isManualPlay) {
+            stickyContextUrl = null;
+            cancelScroll();
+        }
     }, true);
 
-    window.addEventListener('wheel', cancelScroll, { passive: true });
-    window.addEventListener('touchstart', cancelScroll, { passive: true });
     window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') cancelScroll();
     }, { passive: true });
 
     const decodeUrl = (url) => {
-        try { return decodeURIComponent(url); } catch(e) { return url; }
+        try { return decodeURIComponent(url); } catch (e) { return url; }
     };
 
     const getTrackKey = (player) => {
@@ -111,13 +128,16 @@
                 const u = new URL(link.getAttribute('href'), window.location.origin);
                 const inParam = u.searchParams.get('in');
                 if (inParam) {
-                    const parsed = inParam.startsWith('system-playlists') ? '/you/likes' : '/' + inParam;
+                    let parsed = '/' + inParam;
+                    if (inParam.startsWith('system-playlist:likes')) parsed = '/you/likes';
+                    else if (inParam.startsWith('system-playlist:history')) parsed = '/you/history';
+
                     stickyContextUrl = parsed;
                     return parsed;
                 }
-            } catch(e) {}
+            } catch (e) { }
         }
-        
+
         const ctxLink = player.querySelector('.playbackSoundBadge__context');
         if (ctxLink) {
             const href = ctxLink.getAttribute('href');
@@ -157,23 +177,27 @@
 
     let currentKey = null;
     let lastSavedPosition = -1;
+    let isRestoringTime = false;
 
     function jumpToUrlAndScroll(pageUrl, trackKey) {
-        pendingScrollTarget = trackKey;
-        pendingScrollPage = pageUrl;
-        scrollAttempts = 0;
-        
-        const a = document.createElement('a');
-        a.href = pageUrl;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        // Wait 2 seconds before simulating the click.
+        // This gives the current page (e.g. /home) time to finish its initial load and React hydration
+        // before we aggressively tell the SPA to navigate elsewhere.
+        setTimeout(() => {
+            const a = document.createElement('a');
+            a.href = pageUrl;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+
+            startScrollWithDelay(trackKey, pageUrl);
+        }, 2000);
     }
 
     function jumpToUrlAndPlayTrackPage(trackKey) {
         pendingTrackPlay = true;
         scrollAttempts = 0;
-        
+
         const a = document.createElement('a');
         a.href = trackKey;
         document.body.appendChild(a);
@@ -185,21 +209,21 @@
         if (!trackKey) return false;
 
         const links = document.querySelectorAll('a');
-        
+
         for (let i = 0; i < links.length; i++) {
             const link = links[i];
-            
-            // Ignore links inside the bottom playback controls
-            if (link.closest('.playControls')) continue;
+
+            // Ignore links inside the bottom playback controls, queues, and sidebars
+            if (link.closest('.playControls, .queueItemView, .playbackSoundBadge__queue, .queue, .l-sidebar, .sidebarModule')) continue;
 
             const rawHref = link.getAttribute('href');
             if (!rawHref) continue;
 
             const cleanHref = decodeUrl(rawHref.replace('https://soundcloud.com', '').split(/[?#]/)[0].replace(/\/$/, ''));
-            
+
             if (cleanHref === trackKey) {
                 let item = link.closest('.trackList__item, .soundList__item, .soundBadgeList__item, .soundBadge, .searchItem, .userStreamItem, li');
-                
+
                 if (!item) {
                     let parent = link.parentElement;
                     for (let j = 0; j < 5; j++) {
@@ -212,6 +236,10 @@
                 }
 
                 if (item) {
+                    // Ensure the item is actually visible and not a hidden accessibility link
+                    const rect = item.getBoundingClientRect();
+                    if (rect.width < 10 || rect.height < 10) continue;
+
                     const playBtn = item.querySelector('.sc-button-play, .playButton, [title="Play"], [title="Воспроизвести"]');
                     if (playBtn) {
                         // Multi-snap scrolling to forcefully lock the track in the center despite lazy-loaded DOM shifts
@@ -220,7 +248,7 @@
                         setTimeout(snap, 150);
                         setTimeout(snap, 400);
                         setTimeout(snap, 800);
-                        
+
                         item.classList.add('sc-playback-target-highlight');
 
                         setTimeout(() => {
@@ -229,10 +257,12 @@
 
                         setTimeout(() => {
                             if (!playBtn.classList.contains('sc-button-pause') && !playBtn.classList.contains('playing')) {
+                                isRestoringTime = true;
+                                currentKey = null; // Force a full state restore cycle on the next tick
                                 playBtn.click();
                             }
                         }, 300);
-                        
+
                         return true;
                     }
                 }
@@ -244,39 +274,67 @@
     // Initialize script ONLY upon fresh page loads
     const initializeStartup = () => {
         const path = window.location.pathname;
-        const GENERIC_PAGES = ['/', '/discover', '/stream', '/feed', '/popular'];
+        const globalState = GM_getValue('sc_global_state');
 
-        if (GENERIC_PAGES.includes(path)) {
-            const hasJumped = sessionStorage.getItem('sc_startup_jumped');
-            if (!hasJumped) {
-                sessionStorage.setItem('sc_startup_jumped', 'true');
-                
-                const globalState = GM_getValue('sc_global_state');
-                if (globalState && globalState.trackKey) {
-                    if (globalState.playlistUrl) {
-                        jumpToUrlAndScroll(globalState.playlistUrl, globalState.trackKey);
-                    } else {
-                        jumpToUrlAndPlayTrackPage(globalState.trackKey);
-                    }
+        if (globalState && globalState.trackKey) {
+            const playlistUrl = globalState.playlistUrl;
+
+            // Restore sticky context to avoid losing it on refresh
+            if (playlistUrl) {
+                stickyContextUrl = playlistUrl;
+            }
+
+            if (playlistUrl) {
+                if (path === globalState.trackKey) {
+                    // User explicitly navigated to the standalone track page of the playing track. Don't force them out.
+                    startScrollWithDelay(globalState.trackKey, path);
+                } else if (playlistUrl !== path) {
+                    jumpToUrlAndScroll(playlistUrl, globalState.trackKey);
+                } else {
+                    startScrollWithDelay(globalState.trackKey, playlistUrl);
                 }
+                return;
+            } else {
+                // track is standalone. Do not jump.
+                startScrollWithDelay(globalState.trackKey, path);
+                return;
             }
-        } else {
-            const state = GM_getValue('sc_context_' + path);
-            if (state && state.trackKey) {
-                pendingScrollTarget = state.trackKey;
-                pendingScrollPage = path;
-                scrollAttempts = 0;
-            }
+        }
+
+        // Fallback for standalone pages if no global state exists
+        const state = GM_getValue('sc_context_' + path);
+        if (state && state.trackKey) {
+            startScrollWithDelay(state.trackKey, path);
         }
     };
 
     setTimeout(initializeStartup, 500);
 
+    let lastUrl = window.location.pathname;
+
     setInterval(() => {
+        const currentUrl = window.location.pathname;
+        if (currentUrl !== lastUrl) {
+            lastUrl = currentUrl;
+            const globalState = GM_getValue('sc_global_state');
+            if (globalState && globalState.trackKey) {
+                if (currentUrl === globalState.playlistUrl || currentUrl === globalState.trackKey) {
+                    // User navigated via SPA to the context page, trigger scroll!
+                    startScrollWithDelay(globalState.trackKey, currentUrl);
+                }
+            }
+        }
+
         if (pendingScrollTarget) {
-            if (window.location.pathname !== pendingScrollPage) {
-                pendingScrollTarget = null;
-                pendingScrollPage = null;
+            const currentPath = window.location.pathname.replace(/\/$/, '');
+            const targetPath = pendingScrollPage.replace(/\/$/, '');
+
+            if (currentPath !== targetPath) {
+                scrollAttempts++;
+                if (scrollAttempts > 120) {
+                    pendingScrollTarget = null;
+                    pendingScrollPage = null;
+                }
             } else if (findAndClickTrackInDOM(pendingScrollTarget)) {
                 pendingScrollTarget = null;
                 pendingScrollPage = null;
@@ -296,9 +354,9 @@
             if (scrollAttempts > 20) {
                 pendingTrackPlay = false;
             } else {
-                const playBtn = document.querySelector('.soundTitle__playButton') 
-                             || document.querySelector('.listenHero .sc-button-play')
-                             || document.querySelector('.fullHero__foreground .sc-button-play');
+                const playBtn = document.querySelector('.soundTitle__playButton')
+                    || document.querySelector('.listenHero .sc-button-play')
+                    || document.querySelector('.fullHero__foreground .sc-button-play');
                 if (playBtn) {
                     if (!playBtn.classList.contains('sc-button-pause')) {
                         playBtn.click();
@@ -343,13 +401,17 @@
             }
 
             if (targetTime > 0 && targetTime < duration - IGNORE_LAST_SEC) {
+                isRestoringTime = true;
                 setTimeout(() => {
                     const newTimeline = getTimeline(document.querySelector('#app .playControls'));
                     if (newTimeline) clickTimeline(newTimeline, targetTime / duration);
+                    setTimeout(() => { isRestoringTime = false; }, 1500);
                 }, 300);
+            } else {
+                isRestoringTime = false;
             }
         } else {
-            if (position > 0 && position !== lastSavedPosition) {
+            if (!isRestoringTime && position > 0 && position !== lastSavedPosition) {
                 const posInt = Math.floor(position);
                 const lastPosInt = Math.floor(lastSavedPosition);
 
@@ -382,10 +444,10 @@
                 const playlistUrl = getPlaylistUrl(player);
                 const contextKey = playlistUrl || 'standalone';
                 const state = { trackKey: key, time: position, playlistUrl: playlistUrl };
-                
+
                 GM_setValue('sc_context_' + contextKey, state);
                 GM_setValue('sc_global_state', state);
-                
+
                 const isLongTrack = Number(timeline.getAttribute('aria-valuemax')) > LONG_TRACK_SEC;
                 if (isLongTrack) GM_setValue('sc_per_track_' + key, position);
             }
